@@ -11,7 +11,9 @@ import sys
 import os
 import glob
 import commands
+import subprocess
 from optparse import OptionParser
+import os.path
 
 # Setup some stuff
 dirname = './'
@@ -30,6 +32,13 @@ parser.add_option("-d", "--dir",
                     action  = "store",
                     help    = "The directory to parse sub dirs from", 
                     default = os.path.abspath("./")+"/"
+                    )
+
+parser.add_option("-n", "--num", 
+                    dest    = "depth", 
+                    action  = "store",
+                    help    = "Number of recursive directories to process", 
+                    default = 1
                     )
 
 parser.add_option("-v", "--verbose",
@@ -69,8 +78,35 @@ def show_error(error="Undefined Error!"):
     """Writes an error to stderr"""
     sys.stderr.write(error)
     sys.exit(1)
-    
-    
+
+def find_repos(depth, dir = ".", curdepth=1):
+    ret = []
+
+    names = os.listdir(dir)
+
+    for name in names:
+        temp_dir = os.path.join(dir, name)
+
+        if os.path.exists(os.path.join(temp_dir, ".git")):
+            ret.append(temp_dir)
+        elif os.path.isdir(temp_dir):
+            if depth > curdepth:
+                ret.extend(find_repos(depth, os.path.join(dir, name), curdepth + 1))
+    return ret
+
+def call_process(cmd):
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    (stdout, stdin) = (p.stdout, p.stdin)
+    data = stdout.readline()
+    ret = ""
+    while data:
+        data = stdout.readline()
+        ret += data
+    stdout.close()
+    stdin.close()
+
+    return ret
+
 #-------------------
 # Now, onto the main event!
 #-------------------
@@ -78,60 +114,52 @@ if __name__ == "__main__":
     os.system('clear')
     sys.stdout.write('-- Starting git status...\n')
 
-        
     sys.stdout.write('Scanning sub directories of %s\n' %options.dirname)
-    
+    repos = find_repos(options.depth)
+
     # See whats here
-    for infile in glob.glob( os.path.join(options.dirname, '*') ):
+    for infile in repos:
 
-        #is there a .git file
-        if os.path.exists( os.path.join(infile, ".git") ):
-            
-            #Yay, we found one!
-            gitted = True
-            
-            # OK, contains a .git file. Let's descend into it
-            # and ask git for a status
-            out = commands.getoutput('cd '+ infile + '; git status')
-            
-            # Mini?
-            if False == options.verbose:
-                if -1 != out.find('nothing'):
-                    result = ": No Changes"
+        #Yay, we found one!
+        gitted = True
+        
+        # OK, contains a .git file. Let's descend into it
+        # and ask git for a status
+        cur_dir = os.getcwd()
+        os.chdir(infile)
+        out = call_process("git status")
+        
+        # Mini?
+        if False == options.verbose:
+            if -1 != out.find('nothing'):
+                result = ": No Changes"
+                
+                # Pull from the remote
+                if False != options.pull:
+                    push = call_process('git pull '+ 
+                        ' '.join(options.remote.split(":")) 
+                    )
+                    result = result + " (Pulled) \n" + push
+                                      
+                # Push to the remote  
+                if False != options.push:
+                    push = call_process('git push '+ 
+                        ' '.join(options.remote.split(":")) 
+                    )
+                    result = result + " (Pushed) \n" + push
                     
-                    # Pull from the remote
-                    if False != options.pull:
-                        push = commands.getoutput(
-                            'cd '+ infile +
-                            '; git pull '+ 
-                            ' '.join(options.remote.split(":")) 
-                        )
-                        result = result + " (Pulled) \n" + push
-                                          
-                    # Push to the remote  
-                    if False != options.push:
-                        push = commands.getoutput(
-                            'cd '+ infile + 
-                            '; git push '+ 
-                            ' '.join(options.remote.split(":")) 
-                        )
-                        result = result + " (Pushed) \n" + push
-                        
-                    # Write to screen
-                    sys.stdout.write("--" + infile.ljust(40) + result +"\n")
-                else:
-                    sys.stdout.write("--" + infile.ljust(40) +": Changes\n")
+                # Write to screen
+                sys.stdout.write("--" + infile.ljust(40) + result +"\n")
             else:
-                #Print some repo details
-                sys.stdout.write("\n---------------- "+ infile +" -----------------\n")
-                sys.stdout.write(out)
-                sys.stdout.write("\n---------------- "+ infile +" -----------------\n")
-                
-            # Come out of the dir and into the next
-            commands.getoutput('cd ../')
-                
+                sys.stdout.write("--" + infile.ljust(40) +": Changes\n")
+        else:
+            #Print some repo details
+            sys.stdout.write("\n---------------- "+ infile +" -----------------\n")
+            sys.stdout.write(out)
+            sys.stdout.write("\n---------------- "+ infile +" -----------------\n")
             
-
+        # Come out of the dir and into the next
+        os.chdir(cur_dir)
             
     if False == gitted:
         show_error("Error: None of those sub directories had a .git file.\n")
